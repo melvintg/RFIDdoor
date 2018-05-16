@@ -68,22 +68,11 @@
 #include <SPI.h>        // RC522 Module uses SPI protocol
 #include <MFRC522.h>  // Library for Mifare RC522 Devices
 
-/*
-  Instead of a Relay you may want to use a servo. Servos can lock and unlock door locks too
-  Relay will be used by default
-*/
-
 #include <Servo.h>
 
-/*
-  For visualizing whats going on hardware we need some leds and to control door lock a relay and a wipe button
-  (or some other hardware) Used common anode led,digitalWriting HIGH turns OFF led Mind that if you are going
-  to use common cathode led or just seperate leds, simply comment out #define COMMON_ANODE,
-*/
-
-#define PIN_LOCK 3     // Set Relay Pin
+#define PIN_LOCK 3     // Pin for lock servo
 #define PIN_WIPE 2     // Button pin for WipeMode
-#define PIN_BUZZER 5
+#define PIN_BUZZER 5   // Pin for tones notifications
 
 Servo myservo;  
 
@@ -106,11 +95,11 @@ MFRC522 mfrc522(SS_PIN, RST_PIN);
 void setup() {
   //Arduino Pin Configuration
   pinMode(PIN_WIPE, INPUT_PULLUP);   // Enable pin's pull up resistor
-  pinMode(PIN_BUZZER,OUTPUT);
-  pinMode(4,OUTPUT);
-  digitalWrite(4,LOW);
-  //Be careful how relay circuit behave on while resetting or power-cycling your Arduino
-
+  pinMode(PIN_BUZZER, OUTPUT);
+  
+  // GND pin
+  pinMode(4, OUTPUT);
+  digitalWrite(4, LOW);
 
   myservo.attach(PIN_LOCK); 
   myservo.write(5);
@@ -128,19 +117,34 @@ void setup() {
   Serial.println(F("Access Control Example v0.1"));   // For debugging purposes
   ShowReaderDetails();  // Show details of PCD - MFRC522 Card Reader details
 
+
+  // *************************************************** Wipe Function *******************************************************
   //Wipe Code - If the Button (wipeB) Pressed while setup run (powered on) it wipes EEPROM
-  if (digitalRead(PIN_WIPE) == LOW) {  // when button pressed pin should get low, button connected to ground
+  // Procedure: 
+  // - Wipe pin to Low.
+  // - Tone of 1 sec. to inform.
+  // - Wait 10 sec.
+  // - If Wipe pin still to Low
+  // -----> Delete All EEPROM
+  // - End tone of one or two tone to notify result.
+
+  // when button pressed pin should get low, button connected to ground
+  if (digitalRead(PIN_WIPE) == LOW) { 
     Serial.println(F("Wipe Button Pressed"));
     Serial.println(F("You have 10 seconds to Cancel"));
     Serial.println(F("This will be remove all records and cannot be undone"));
-    tone(PIN_BUZZER, 1000); // Buzzer stays on to inform user we are going to wipe
+    // Buzzer stays on to inform user we are going to wipe
+    tone(PIN_BUZZER, 1000); 
     //TODO: tone(PIN_BUZZER, 1000, 10000);
-    delay(10000);                         // Give user enough time to cancel operation
+    // Give user enough time to cancel operation
+    delay(10000);                         
     noTone(PIN_BUZZER);
-    if (digitalRead(PIN_WIPE) == LOW) {    // If button still be pressed, wipe EEPROM
+    // If button is still pressed, wipe EEPROM
+    if (digitalRead(PIN_WIPE) == LOW) {
       Serial.println(F("Starting Wiping EEPROM"));
       boolean toneActive = false;
-      for (uint8_t x = 0; x < EEPROM.length(); x = x + 1) {    //Loop end of EEPROM address
+      //Loop end of EEPROM address
+      for (uint8_t x = 0; x < EEPROM.length(); x = x + 1) {
         // Buzzer stays on to inform user we are going to wipe
         if (toneActive) {
           noTone(PIN_BUZZER);
@@ -150,44 +154,61 @@ void setup() {
           toneActive = false;
         }
 
-        if (EEPROM.read(x) == 0) {              //If EEPROM address 0
+        //If EEPROM address 0
+        if (EEPROM.read(x) == 0) {              
           // do nothing, already clear, go to the next address in order to save time and reduce writes to EEPROM
         }
         else {
-          EEPROM.write(x, 0);       // if not write 0 to clear, it takes 3.3mS
+          // if not write 0 to clear, it takes 3.3mS
+          EEPROM.write(x, 0);       
         }
       }
       Serial.println(F("EEPROM Successfully Wiped"));
       oneTone();
-    }
-    else {
-      Serial.println(F("Wiping Cancelled")); // Show some feedback that the wipe button did not pressed for 15 seconds
+
+    } else {
+      // If button is not still pressed, wipe EEPROM operation cancelled.
+      Serial.println(F("Wiping Cancelled"));
       twoTone();
     }
   }
+
+
+  // *************************************************** Check Master UID *******************************************************
   // Check if master card defined, if not let user choose a master card
   // This also useful to just redefine the Master Card
   // You can keep other EEPROM records just write other than 143 to EEPROM address 1
   // EEPROM address 1 should hold magical number which is '143'
+
+  // Procedure: 
+  // - If we don't have magic number, i.e. we don't have registered any Master UID.
+  // - Play cycleTone. 
+  // - If we get some UID we end program with an ackTone.
+  
   if (EEPROM.read(1) != 143) {
     Serial.println(F("No Master Card Defined"));
     Serial.println(F("Scan A PICC to Define as Master Card"));
     do {
       cycleTone();
-      successRead = getID();            // sets successRead to 1 when we get read from reader otherwise 0
+      successRead = getID();            
     }
-    while (!successRead);                  // Program will not go further while you not get a successful read
-    for ( uint8_t j = 0; j < 4; j++ ) {        // Loop 4 times
-      EEPROM.write( 2 + j, readCard[j] );  // Write scanned PICC's UID to EEPROM, start from address 3
+    while (!successRead);
+                      
+    for ( uint8_t j = 0; j < 4; j++ ) { 
+      // Write scanned PICC's UID to EEPROM, start from address 3
+      EEPROM.write( 2 + j, readCard[j] );  
     }
-    EEPROM.write(1, 143);                  // Write to EEPROM we defined Master Card.
+    // Write to EEPROM we defined Master Card. Add flac of Magic Number.
+    EEPROM.write(1, 143);                  
     Serial.println(F("Master Card Defined"));
     ackProgTone();
   }
+
+  // *************************************************** Store Master UID from EEPROM to RAM memory *******************************************************
   Serial.println(F("-------------------"));
   Serial.println(F("Master Card's UID"));
-  for ( uint8_t i = 0; i < 4; i++ ) {          // Read Master Card's UID from EEPROM
-    masterCard[i] = EEPROM.read(2 + i);    // Write it to masterCard
+  for ( uint8_t i = 0; i < 4; i++ ) {       
+    masterCard[i] = EEPROM.read(2 + i);
     Serial.print(masterCard[i], HEX);
   }
   Serial.println("");
@@ -199,35 +220,45 @@ void setup() {
 
 ///////////////////////////////////////// Main Loop ///////////////////////////////////
 void loop () {
+
+  // *************************************************** Read RFID UID Card *******************************************************
   do {
     successRead = getID();  // sets successRead to 1 when we get read from reader otherwise 0
 
+    // *************************************************** Wipe Only Master UID Function *******************************************************
     if (digitalRead(PIN_WIPE) == LOW) { // Check if button is pressed
       // Give some feedback
       Serial.println(F("Wipe Button Pressed"));
-      Serial.println(F("Master Card will be Erased! in 10 seconds"));
-      tone(PIN_BUZZER, 1000); // Buzzer stays on to inform user we are going to wipe
-      delay(5000);  // Wait 10 seconds to see user still wants to wipe
+      Serial.println(F("Master Card will be Erased! in 5 seconds"));
+      // Buzzer stays on to inform user we are going to wipe
+      tone(PIN_BUZZER, 1000); 
+      // Wait 5 seconds to see user still wants to wipe
+      delay(5000);  
       noTone(PIN_BUZZER);
       if (digitalRead(PIN_WIPE) == LOW) {
-        EEPROM.write(1, 0);                  // Reset Magic Number.
+        // Reset Magic Number.
+        EEPROM.write(1, 0);                  
         Serial.println(F("Restart device to re-program Master Card"));
         ackProgTone();
         while (1);
       }
     }
   }
-  while (!successRead);   //the program will not go further while you are not getting a successful read
+  //the program will not go further while you are not getting a successful read
+  while (!successRead);   
 
+  // If the execution is in program Mode (i.e. previously, master card was detected and enter to program mode, so this loop is for new card)
   if (programMode) {
-    if ( isMaster(readCard) ) { //When in program mode check First If master card scanned again to exit program mode
+    // Check first if master card scanned again to exit program mode
+    if (isMaster(readCard) ) { 
       Serial.println(F("Master Card Scanned"));
       Serial.println(F("Exiting Master Program Mode"));
       Serial.println(F("-----------------------------"));
       nakProgTone();
     }
     else {
-      if ( findID(readCard) ) { // If scanned card is known delete it
+       // If scanned card is known delete it
+      if (findID(readCard) ) {
         Serial.println(F("I know this PICC, removing..."));
         Serial.println("-----------------------------");
         Serial.println(F("Scan a PICC to ADD or REMOVE to EEPROM"));
@@ -236,7 +267,9 @@ void loop () {
         } else {
           twoTone();
         }
-      } else {                    // If scanned card is not known add it
+        
+      // If scanned card is not known add it
+      } else {                    
         Serial.println(F("I do not know this PICC, adding..."));
         Serial.println(F("-----------------------------"));
         Serial.println(F("Scan a PICC to ADD or REMOVE to EEPROM"));
@@ -248,27 +281,35 @@ void loop () {
       }
     }
     programMode = false;
+
+  // Normal Loop Operation
   } else {
-    if ( isMaster(readCard)) {    // If scanned card's ID matches Master Card's ID - enter program mode
+    // If scanned card's ID matches Master Card's ID - enter program mode
+    if (isMaster(readCard)) {
+      // Open Door because is Master Card and after, enter to program mode.
       granted();
 
       Serial.println(F("Hello Master - Entered Program Mode"));
-      uint8_t count = EEPROM.read(0);   // Read the first Byte of EEPROM that
-      Serial.print(F("I have "));     // stores the number of ID's in EEPROM
+      // Read the first Byte of EEPROM that stores the number of ID's in EEPROM
+      uint8_t count = EEPROM.read(0);   
+      Serial.print(F("I have "));
       Serial.print(count);
       Serial.print(F(" record(s) on EEPROM"));
       Serial.println("");
       Serial.println(F("Scan Master again after 2 second delay"));
       delay(2000);
 
+      // If we detect again a Card in the RFID field
       if (getID()) {
-        if ( isMaster(readCard) ) {
+        // And this card is Master Card. Enter Program Mode.
+        if (isMaster(readCard) ) {
           programMode = true;
           Serial.println(F("Scan a PICC to ADD or REMOVE to EEPROM"));
           Serial.println(F("Scan Master Card again to Exit Program Mode"));
           Serial.println(F("-----------------------------"));
           cycleTone();
 
+        // Normal Card is detected. Exit.
         } else {
           programMode = false;
           Serial.println(F("Normal Card Scanned"));
@@ -277,19 +318,22 @@ void loop () {
           nakProgTone();
         }
 
+      // No card detected in this 2 seconds. Exit Program Mode.
       } else {
           Serial.println(F("No Card Scanned"));
           Serial.println(F("Exiting Master Program Mode"));
           Serial.println(F("-----------------------------"));
       }
+
+      // Return because we detected some card after this 2 second delay.
       return;
     }
 
-    if ( findID(readCard) ) { // If not, see if the card is in the EEPROM
+    if (findID(readCard)) {
       Serial.println(F("Welcome, You shall pass"));
-      granted();         // Open the door lock for 300 ms
+      granted();
     }
-    else {      // If not, show that the ID was not valid
+    else {
       Serial.println(F("You shall not pass"));
       denied();
     }
@@ -303,21 +347,18 @@ void granted () {
     myservo.attach(PIN_LOCK); 
   }
   
-
   if(openDoor) {
-    myservo.write(90);              // tell servo to go to position in variable 'pos'
-    delay(1500);                       // waits 15ms for the servo to reach the position
+    myservo.write(90);              
+    delay(1500);
     openDoor = false;
   } else {
-    myservo.write(5);              // tell servo to go to position in variable 'pos'
-    delay(1500);                       // waits 15ms for the servo to reach the position
+    myservo.write(5);
+    delay(1500);
     openDoor = true;
   }
   if (myservo.attached()) {
     myservo.detach();
   }
-  
-  
 }
 
 ///////////////////////////////////////// Access Denied  ///////////////////////////////////
